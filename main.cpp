@@ -6,6 +6,7 @@
 
 using namespace std;
 
+/// resurve enumeration
 enum class eResource
 {
     none,
@@ -13,12 +14,15 @@ enum class eResource
     ssd,
     tty,
 };
+/// event enumeration
 enum class eEvent
 {
     arrive,
     complete,
     endSim,
 };
+
+/// Resource request
 class cRequest
 {
 public:
@@ -31,13 +35,16 @@ public:
 
     }
 };
+
+/// A process
 class cProcess
 {
 public:
-    int id;
-    int ar;
-    vector< cRequest > vReqs;
-    int myNextReq;
+
+    /** CTOR
+        @param[in] i id
+        @param[in] a arrival time
+    */
     cProcess( int i, int a )
         : id( i )
         , ar( a )
@@ -45,74 +52,162 @@ public:
     {
 
     }
+    /** Add a resource request
+        @param[in] r resource required
+        @param[in] t time resource required for
+    */
     void Add( eResource r, int t )
     {
         vReqs.push_back( cRequest( r, t ));
     }
-    cRequest NextRequest()
-    {
-        if( myNextReq >= (int)vReqs.size() )
-        {
-            return cRequest( eResource::none, -1 );
-        }
-        return vReqs[ myNextReq++ ];
-    }
+    /// Execute next reuest
+    void NextRequest();
+
+private:
+    int id;                         ///< id
+    int ar;                         ///< arrival time
+    vector< cRequest > vReqs;       ///< requests from this process
+    int myNextReq;                  ///< index of next request
 };
 
+/// The processes
+class cProcessTable
+{
+public:
+
+    /** Add a process
+        @param[in] id
+        @param[in] t arrival time
+    */
+    void Add( int id, int t )
+    {
+        myProcess.insert( make_pair(id, cProcess( id, t )));
+    }
+    /** Add a request from the process
+        @param[in] id
+        @param[in] r resource
+        @param[in] t time the resource is required
+    */
+    void Add( int id, eResource r, int t )
+    {
+        myProcess.find( id )->second.Add( r, t );
+    }
+    /** Execute next process request
+        @param[in] id
+    */
+    void ExecNextRequest( int id );
+
+private:
+    map< int,cProcess > myProcess;
+};
+
+///  A simulated event
 class cEvent
 {
 public:
-    eEvent myType;
-    int myPID;
+    eEvent myType;          ///< the type of event
+    int myPID;              ///< the process ID causing the event
+
+    /** CTOR
+        @param[in] e event type
+        @param[in] p process id
+    */
     cEvent( eEvent e, int p )
         : myType( e )
         , myPID( p )
     {
 
     }
-    string text()
-    {
-        stringstream ss;
-        switch( myType )
-        {
-        case eEvent::arrive:
-            ss << "Process " << myPID << " arrives";
-            break;
-        case eEvent::complete:
-            ss << "Process " << myPID << " completes";
-            break;
-        case eEvent::endSim:
-            ss << "Simulation completed";
-            break;
-        }
-        return ss.str();
-    }
+    /// Human readable text desribing event as it completes
+    string text();
+
 };
 
+/// A schedule of events waiting to happen
 class cSchedule
 {
 public:
-   multimap< int,cEvent > mySchedule;
 
-   void Add( int time, const cEvent& e )
-   {
-       mySchedule.insert( make_pair( time, e ));
-   }
-   cEvent Next( int& Clock )
-   {
-        auto it = mySchedule.lower_bound( Clock );
-        if( it == mySchedule.end()) {
-            static cEvent end_event( eEvent::endSim, -1 );
-            return end_event;
+    /** Add an event
+        @param[in] time  the time of the event
+        @param[in] e the event
+    */
+    void Add( int time, const cEvent& e )
+    {
+        mySchedule.insert( make_pair( time, e ));
+    }
+    /** Get next event that will occur
+        @param[in/out] Clock simulation time
+        @return the next event
+        The simulation clock will be advanced to the next event
+    */
+    cEvent Next( int& Clock )
+    {
+        if( ! mySchedule.size() )
+        {
+            // there are no more event,
+            // so return the simulation end event
+            static cEvent e( eEvent::endSim, -1);
+            return e;
         }
-        Clock += it->first;
-       // mySchedule.erase( it );
-        return it->second;
-   }
+        Clock = mySchedule.begin()->first;
+        return mySchedule.begin()->second;
+    }
+    /// Remove completed event from schedule
+    void Done()
+    {
+        mySchedule.erase( mySchedule.begin() );
+    }
+private:
+    /// Upcoming events mapped by their times
+    multimap< int,cEvent > mySchedule;
 };
 
-map< int,cProcess > mProcess;
+cProcessTable theProcessTable;
 cSchedule theSchedule;
+int theTime;
+
+void cProcess::NextRequest()
+{
+    if( myNextReq >= (int)vReqs.size() )
+    {
+        return;
+    }
+
+    cRequest& req = vReqs[ myNextReq++ ];
+    if( req.myRes == eResource::none )
+        return;
+
+
+    // enter the new request into the schedule
+    theSchedule.Add( theTime+req.time, cEvent( eEvent::complete, id ));
+
+}
+
+void cProcessTable::ExecNextRequest( int id )
+{
+    myProcess.find( id )->second.NextRequest();
+    // remove the completed event from the schedule
+    theSchedule.Done();
+}
+
+string cEvent::text()
+{
+    stringstream ss;
+    switch( myType )
+    {
+    case eEvent::arrive:
+        ss << "Process " << myPID << " arrives";
+        break;
+    case eEvent::complete:
+        ss << "Process " << myPID << " completes";
+        break;
+    case eEvent::endSim:
+        ss << "Simulation completed";
+        break;
+    }
+    return ss.str();
+}
 
 void Read()
 {
@@ -132,13 +227,13 @@ void Read()
             pid = strtol(p,&p,10);
             int arv = strtol(p,NULL,10);
             //cout << "pid " << pid << " arrive " << arv << endl;
-            mProcess.insert( make_pair(pid, cProcess( pid, arv )));
+            theProcessTable.Add( pid, arv );
             theSchedule.Add( arv, cEvent( eEvent::arrive, pid ) );
         }
         else if( line[0] == 'c' )
         {
             r = eResource::core;
-            mProcess.find( pid )->second.Add( r, strtol(p,NULL,10) );
+            theProcessTable.Add( pid, r, strtol(p,NULL,10) );
         }
     }
 }
@@ -146,38 +241,22 @@ void Read()
 void Run()
 {
     // start the clock
-    int theTime = 0;
+    theTime = 0;
 
     // run simulation until all reuests are completed
     while( 1 )
     {
-        // find next event on schedule
-        auto it = theSchedule.mySchedule.lower_bound( theTime);
-        if( it == theSchedule.mySchedule.end())
-            return;
-
-        // advance clock to next event
-        theTime = it->first;
-
-        //cEvent E = theSchedule.Next( theTime );
+        cEvent E = theSchedule.Next( theTime );
 
         // tell user what has happened
-        cout << it->second.text() << " at " << theTime << "\n";
+        cout << E.text() << " at " << theTime << "\n";
 
-        if( it->second.myType == eEvent::endSim )
+        // check for completed simulation
+        if( E.myType == eEvent::endSim )
             break;
 
-        // does the process have another request?
-        int pid = it->second.myPID;
-        auto req = mProcess.find( pid )->second.NextRequest();
-        if( req.myRes != eResource::none ) {
-
-            // enter the new request into the schedule
-            theSchedule.Add( theTime+req.time, cEvent( eEvent::complete, pid ));
-        }
-
-        // remove the completed event from the schedule
-        theSchedule.mySchedule.erase( it );
+        // do the process' next request
+        theProcessTable.ExecNextRequest( E.myPID );
     }
 }
 
