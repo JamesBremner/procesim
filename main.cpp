@@ -44,6 +44,14 @@ class cProcess
 {
 public:
 
+    enum class eStatus
+    {
+        notYet,
+        arrived,
+        running,
+        completed,
+        waiting
+    };
     /** CTOR
         @param[in] i id
         @param[in] a arrival time
@@ -52,6 +60,7 @@ public:
         : id( i )
         , ar( a )
         , myNextReq( 0 )
+        , myStatus( eStatus::notYet )
     {
 
     }
@@ -69,11 +78,19 @@ public:
     /// Move on to next request
     void NextRequest();
 
+    void set( eStatus s )
+    {
+        //cout << "Process set " << id <<" " << (int)s << "\n";
+        myStatus = s;
+    }
+    string text();
+
 private:
     int id;                         ///< id
     int ar;                         ///< arrival time
     vector< cRequest > vReqs;       ///< requests from this process
     int myNextReq;                  ///< index of next request
+    eStatus myStatus;
 };
 
 /// The processes
@@ -102,6 +119,10 @@ public:
         @param[in] id
     */
     cRequest& Request( int id );
+
+    cProcess& find( int id );
+
+    string text();
 
 private:
     map< int,cProcess > myProcess;
@@ -180,7 +201,7 @@ public:
     }
     bool Request()
     {
-        cout << "Core request " << myCoreBusy << " busy of " << myCoreCount << "\n";
+        //cout << "Core request " << myCoreBusy << " busy of " << myCoreCount << "\n";
         if ( myCoreBusy == myCoreCount )
             return false;
         myCoreBusy++;
@@ -194,39 +215,76 @@ public:
     }
 };
 
-/// The simuklator
+/// The simulator
 class cProcessorSimulator
 {
 public:
+    /// read specification from standard input
+    void Read();
+
+    /// A process has arrived
+    void Arrive( int pid );
+
+    /// A process has requested a core
     void RequestCore( int pid );
+
+    /// A process has freed a core
     void FreeCore();
+
+    /// find process from process id
+    cProcess& find( int pid );
+
+    /// human readable snapshot string
     string snapShot();
+
 private:
+
+    // queue of processes waiting for core
     queue<int> myQueue;
+
+    // the cores
     cCores myCores;
+
+    // the process table
+    cProcessTable myProcessTable;
 };
 
-cProcessTable theProcessTable;
+
 cSchedule theSchedule;
 int theTime;
 
 cProcessorSimulator theSim;
 
+void cProcessorSimulator::Arrive( int pid )
+{
+    cProcess& P = theSim.find( pid );
+    P.set( cProcess::eStatus::arrived );
+    switch( P.Request( ).myRes )
+    {
+    case eResource::core:
+        theSchedule.Add( theTime, cEvent( eEvent::coreRequest, pid ));
+        break;
+    }
+}
+
 void cProcessorSimulator::RequestCore( int pid )
 {
+    cProcess& P = theSim.find( pid );
     // request a core
     if( myCores.Request() )
     {
-        // successful - schedule event when th core will be freed
+        // successful - schedule event when the core will be freed
         theSchedule.Add(
-            theTime + theProcessTable.Request( pid ).time,
+            theTime + P.Request().time,
             cEvent( eEvent::coreFreed, pid ));
+        P.set( cProcess::eStatus::running );
     }
     else
     {
         // no core available - add process to queue
         cout << "process blocked\n";
         myQueue.push( pid );
+        P.set( cProcess::eStatus::waiting );
     }
 }
 
@@ -250,14 +308,19 @@ void cProcessorSimulator::FreeCore()
 
     // schedule event when the core will be freed
     theSchedule.Add(
-        theTime + theProcessTable.Request( pid ).time,
+        theTime + myProcessTable.Request( pid ).time,
         cEvent( eEvent::coreFreed, pid ));
 
+}
+cProcess& cProcessorSimulator::find( int pid )
+{
+    return myProcessTable.find( pid );
 }
 string cProcessorSimulator::snapShot()
 {
     stringstream ss;
-    ss << theSchedule.text();
+    //ss << theSchedule.text();
+    ss << myProcessTable.text();
     ss << myQueue.size() << " processes waiting for core\n";
     ss << "\n";
     return ss.str();
@@ -304,10 +367,34 @@ cRequest& cProcess::Request()
 
 void cProcess::NextRequest()
 {
-    if( myNextReq < (int)vReqs.size() )
-    {
+    if( myNextReq == (int)vReqs.size()-1 )
+        myStatus = eStatus::completed;
+    else
         myNextReq++;
+}
+string cProcess::text()
+{
+    stringstream ss;
+    ss << id << " ";
+    switch( myStatus )
+    {
+    case eStatus::notYet:
+        ss << "---";
+        break;
+    case eStatus::arrived:
+        ss << "arrived";
+        break;
+    case eStatus::running:
+        ss << "running";
+        break;
+    case eStatus::waiting:
+        ss << "waiting";
+        break;
+    case eStatus::completed:
+        ss << "completed";
+        break;
     }
+    return ss.str();
 }
 
 cRequest& cProcessTable::Request( int id )
@@ -316,6 +403,23 @@ cRequest& cProcessTable::Request( int id )
     if( it == myProcess.end() )
         throw std::runtime_error("lost process");
     return it->second.Request();
+}
+cProcess& cProcessTable::find( int id )
+{
+    auto it = myProcess.find( id );
+    if( it == myProcess.end() )
+        throw std::runtime_error("lost process");
+    return it->second;
+}
+
+string cProcessTable::text()
+{
+    stringstream ss;
+    ss << "++ Process Table ++\n";
+    for( auto pit : myProcess )
+        ss << pit.second.text() << "\n";
+    ss << "++++++++++\n";
+    return ss.str();
 }
 
 string cEvent::text()
@@ -345,17 +449,13 @@ string cEvent::text()
 void cEvent::execute()
 {
     cout << "Event: " << text() << "\n";
+    cProcess& P = theSim.find( myPID );
 
     switch( myType )
     {
 
     case eEvent::arrive:
-        switch( theProcessTable.Request( myPID ).myRes )
-        {
-        case eResource::core:
-            theSchedule.Add( theTime, cEvent( eEvent::coreRequest, myPID ));
-            break;
-        }
+        theSim.Arrive( myPID );
         break;
 
     case eEvent::coreRequest:
@@ -363,13 +463,14 @@ void cEvent::execute()
         break;
 
     case eEvent::coreFreed:
+        P.NextRequest();
         theSim.FreeCore();
         break;
     }
     theSchedule.Done();
 }
 
-void Read()
+void cProcessorSimulator::Read()
 {
     string line;
     int pid;
@@ -377,7 +478,7 @@ void Read()
     {
         if( ! line.length() )
             continue;
-        //cout << line << "\n";
+        cout << line << "\n";
         char * p = (char*)line.c_str() + line.find(" ")+1;
         eResource r;
         if( line[0] == 'p' )
@@ -386,14 +487,14 @@ void Read()
 
             pid = strtol(p,&p,10);
             int arv = strtol(p,NULL,10);
-            //cout << "pid " << pid << " arrive " << arv << endl;
-            theProcessTable.Add( pid, arv );
+            cout << "pid " << pid << " arrive " << arv << endl;
+            myProcessTable.Add( pid, arv );
             theSchedule.Add( arv, cEvent( eEvent::arrive, pid ) );
         }
         else if( line[0] == 'c' )
         {
             r = eResource::core;
-            theProcessTable.Add( pid, r, strtol(p,NULL,10) );
+            myProcessTable.Add( pid, r, strtol(p,NULL,10) );
         }
     }
 }
@@ -424,7 +525,7 @@ void Run()
 
 int main()
 {
-    Read();
+    theSim.Read();
     Run();
     return 0;
 }
