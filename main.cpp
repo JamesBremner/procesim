@@ -187,32 +187,38 @@ private:
 class cCores
 {
 public:
-    int myCoreCount;
-    int myCoreBusy;
+
+    /// CTOR - single core
     cCores()
         : myCoreCount( 1 )
         , myCoreBusy( 0 )
+        , myBusyStart( 1 )
+        , myBusyTotal( 1 )
     {
 
     }
+    // Specify number of cores
     void set( int count )
     {
         myCoreCount = count;
+        myBusyStart.resize( count );
+        myBusyTotal.resize( count );
     }
-    bool Request()
-    {
-        //cout << "Core request " << myCoreBusy << " busy of " << myCoreCount << "\n";
-        if ( myCoreBusy == myCoreCount )
-            return false;
-        myCoreBusy++;
-        return true;
-    }
-    void Free()
-    {
-        if( myCoreBusy <= 0 )
-            throw std::runtime_error("cCore undeflow");
-        myCoreBusy--;
-    }
+    /** Request a core
+        @return true on success, false on no free core available
+    */
+    bool Request();
+
+    /// Free a core
+    void Free();
+
+    vector<int> Utilization();
+
+private:
+    int myCoreCount;                ///< number of cores
+    int myCoreBusy;                 ///< number of bust cores
+    vector<int> myBusyStart;        ///< time each core started being busy
+    vector<int> myBusyTotal;        ///< total time each core was busy
 };
 
 /// The simulator
@@ -221,6 +227,9 @@ class cProcessorSimulator
 public:
     /// read specification from standard input
     void Read();
+
+    /// run the simulation
+    void Run();
 
     /// A process has arrived
     void Arrive( int pid );
@@ -234,8 +243,23 @@ public:
     /// find process from process id
     cProcess& find( int pid );
 
+    /// Current event is complete - remove from schedule
+    void EventDone()
+    {
+        mySchedule.Done();
+    }
+    int time()
+    {
+        return myTime;
+    }
+
     /// human readable snapshot string
     string snapShot();
+
+    vector<int> CoreUtilization()
+    {
+        return myCores.Utilization();
+    }
 
 private:
 
@@ -247,11 +271,14 @@ private:
 
     // the process table
     cProcessTable myProcessTable;
+
+    // simulation clock
+    int myTime;
+
+    // schedule of waiting events
+    cSchedule mySchedule;
 };
 
-
-cSchedule theSchedule;
-int theTime;
 
 cProcessorSimulator theSim;
 
@@ -262,7 +289,7 @@ void cProcessorSimulator::Arrive( int pid )
     switch( P.Request( ).myRes )
     {
     case eResource::core:
-        theSchedule.Add( theTime, cEvent( eEvent::coreRequest, pid ));
+        mySchedule.Add( myTime, cEvent( eEvent::coreRequest, pid ));
         break;
     }
 }
@@ -274,15 +301,14 @@ void cProcessorSimulator::RequestCore( int pid )
     if( myCores.Request() )
     {
         // successful - schedule event when the core will be freed
-        theSchedule.Add(
-            theTime + P.Request().time,
+        mySchedule.Add(
+            myTime + P.Request().time,
             cEvent( eEvent::coreFreed, pid ));
         P.set( cProcess::eStatus::running );
     }
     else
     {
         // no core available - add process to queue
-        cout << "process blocked\n";
         myQueue.push( pid );
         P.set( cProcess::eStatus::waiting );
     }
@@ -307,11 +333,12 @@ void cProcessorSimulator::FreeCore()
     myCores.Request();
 
     // schedule event when the core will be freed
-    theSchedule.Add(
-        theTime + myProcessTable.Request( pid ).time,
+    mySchedule.Add(
+        myTime + myProcessTable.Request( pid ).time,
         cEvent( eEvent::coreFreed, pid ));
 
 }
+
 cProcess& cProcessorSimulator::find( int pid )
 {
     return myProcessTable.find( pid );
@@ -319,11 +346,37 @@ cProcess& cProcessorSimulator::find( int pid )
 string cProcessorSimulator::snapShot()
 {
     stringstream ss;
-    //ss << theSchedule.text();
+    //ss << mySchedule.text();
     ss << myProcessTable.text();
     ss << myQueue.size() << " processes waiting for core\n";
     ss << "\n";
     return ss.str();
+}
+
+bool cCores::Request()
+{
+    //cout << "Core request " << myCoreBusy << " busy of " << myCoreCount << "\n";
+    if ( myCoreBusy == myCoreCount )
+        return false;
+    myBusyStart[ myCoreBusy ] = theSim.time();
+    myCoreBusy++;
+    return true;
+}
+
+void cCores::Free()
+{
+    if( myCoreBusy <= 0 )
+        throw std::runtime_error("cCore undeflow");
+    myCoreBusy--;
+    myBusyTotal[ myCoreBusy] += theSim.time() - myBusyStart[ myCoreBusy ];
+}
+
+vector<int> cCores::Utilization()
+{
+    vector<int> u;
+    for( int c = 0; c < myCoreCount; c++ )
+        u.push_back( 100 * myBusyTotal[c] / theSim.time() );
+    return u;
 }
 
 cEvent cSchedule::Next( int& Clock )
@@ -467,7 +520,7 @@ void cEvent::execute()
         theSim.FreeCore();
         break;
     }
-    theSchedule.Done();
+    theSim.EventDone();
 }
 
 void cProcessorSimulator::Read()
@@ -489,7 +542,7 @@ void cProcessorSimulator::Read()
             int arv = strtol(p,NULL,10);
             cout << "pid " << pid << " arrive " << arv << endl;
             myProcessTable.Add( pid, arv );
-            theSchedule.Add( arv, cEvent( eEvent::arrive, pid ) );
+            mySchedule.Add( arv, cEvent( eEvent::arrive, pid ) );
         }
         else if( line[0] == 'c' )
         {
@@ -499,17 +552,17 @@ void cProcessorSimulator::Read()
     }
 }
 
-void Run()
+void cProcessorSimulator::Run()
 {
     cout << theSim.snapShot();
 
     // start the clock
-    theTime = 0;
+    myTime = 0;
 
     // run simulation until all reuests are completed
     while( 1 )
     {
-        cEvent E = theSchedule.Next( theTime );
+        cEvent E = mySchedule.Next( myTime );
 
         // check for completed simulation
         if( E.myType == eEvent::endSim )
@@ -520,12 +573,17 @@ void Run()
         cout << theSim.snapShot();
     }
 
-    cout << "Simulation ended at " << theTime << "\n";
+    cout << "Simulation ended at " << myTime << "\n";
 }
 
 int main()
 {
     theSim.Read();
-    Run();
+    theSim.Run();
+    cout << "Core Utilization %\n";
+    for( auto u : theSim.CoreUtilization() )
+    {
+        cout << u << "\n";
+    }
     return 0;
 }
