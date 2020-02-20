@@ -23,6 +23,9 @@ enum class eEvent
     endSim,
     coreFreed,
     coreRequest,
+    ssdRequest,
+    ttyRequest,
+    free,
 };
 
 /// Resource request
@@ -225,7 +228,14 @@ private:
 class cProcessorSimulator
 {
 public:
-    /// read specification from standard input
+    /** read specification from standard input
+    <pre>
+    p pid art   define process with is and arival time
+    c time      request core for time
+    s time      request ssd for time
+    t time      reuest tty for time
+    </pre>
+    */
     void Read();
 
     /// run the simulation
@@ -240,6 +250,9 @@ public:
     /// A process has freed a core
     void FreeCore();
 
+    /// A process has requested ssd or tty
+    void Request( int pid );
+
     /// find process from process id
     cProcess& find( int pid );
 
@@ -248,6 +261,7 @@ public:
     {
         mySchedule.Done();
     }
+    /// get current simulation time
     int time()
     {
         return myTime;
@@ -256,6 +270,7 @@ public:
     /// human readable snapshot string
     string snapShot();
 
+    /// get core utilization per centages
     vector<int> CoreUtilization()
     {
         return myCores.Utilization();
@@ -291,7 +306,22 @@ void cProcessorSimulator::Arrive( int pid )
     case eResource::core:
         mySchedule.Add( myTime, cEvent( eEvent::coreRequest, pid ));
         break;
+    case eResource::ssd:
+        mySchedule.Add( myTime, cEvent( eEvent::ssdRequest, pid ));
+        break;
+    case eResource::tty:
+        mySchedule.Add( myTime, cEvent( eEvent::ttyRequest, pid ));
+        break;
     }
+}
+
+void cProcessorSimulator::Request( int pid )
+{
+    cProcess& P = theSim.find( pid );
+    mySchedule.Add(
+        myTime + P.Request().time,
+        cEvent( eEvent::free, pid ));
+    P.set( cProcess::eStatus::running );
 }
 
 void cProcessorSimulator::RequestCore( int pid )
@@ -478,24 +508,34 @@ string cProcessTable::text()
 string cEvent::text()
 {
     stringstream ss;
+    string desc;
     switch( myType )
     {
     case eEvent::arrive:
-        ss << "Process " << myPID << " arrives";
+        desc = " arrives";
         break;
     case eEvent::complete:
-        ss << "Process " << myPID << " completes";
+        desc =  " completes";
         break;
     case eEvent::endSim:
-        ss << "Simulation completed";
+        return "Simulation completed";
         break;
     case eEvent::coreRequest:
-        ss << "Process " << myPID << " requests core";
+        desc =  " requests core";
+        break;
+    case eEvent::ssdRequest:
+        desc =  " requests ssd";
+        break;
+    case eEvent::ttyRequest:
+        desc =  " requests tty";
         break;
     case eEvent::coreFreed:
-        ss << "Process " << myPID << " frees core";
+        desc =  " frees core";
         break;
+    default:
+        return "";
     }
+    ss << "Process " << myPID << desc;
     return ss.str();
 }
 
@@ -506,7 +546,6 @@ void cEvent::execute()
 
     switch( myType )
     {
-
     case eEvent::arrive:
         theSim.Arrive( myPID );
         break;
@@ -518,6 +557,15 @@ void cEvent::execute()
     case eEvent::coreFreed:
         P.NextRequest();
         theSim.FreeCore();
+        break;
+
+    case eEvent::ssdRequest:
+    case eEvent::ttyRequest:
+        theSim.Request( myPID );
+        break;
+
+    case eEvent::free:
+        P.NextRequest();
         break;
     }
     theSim.EventDone();
@@ -533,8 +581,9 @@ void cProcessorSimulator::Read()
             continue;
         cout << line << "\n";
         char * p = (char*)line.c_str() + line.find(" ")+1;
-        eResource r;
-        if( line[0] == 'p' )
+        switch( line[0] )
+        {
+        case 'p':
         {
             // process
 
@@ -544,10 +593,26 @@ void cProcessorSimulator::Read()
             myProcessTable.Add( pid, arv );
             mySchedule.Add( arv, cEvent( eEvent::arrive, pid ) );
         }
-        else if( line[0] == 'c' )
-        {
-            r = eResource::core;
-            myProcessTable.Add( pid, r, strtol(p,NULL,10) );
+        break;
+
+        case 'c':
+            myProcessTable.Add(
+                pid,
+                eResource::core,
+                strtol(p,NULL,10) );
+            break;
+        case 't':
+            myProcessTable.Add(
+                pid,
+                eResource::tty,
+                strtol(p,NULL,10) );
+            break;
+        case 's':
+            myProcessTable.Add(
+                pid,
+                eResource::ssd,
+                strtol(p,NULL,10) );
+            break;
         }
     }
 }
